@@ -94,9 +94,12 @@ struct MainView: View {
 
     // Галочка в панели: создание нового чата или подключение по принятому ключу
     private func submit(name chatName: String) {
-        uiLog.info("submit: pending=\(pendingJoinKey != nil)")
+        // Захватываем ключ до Task: закрытие панели очищает pendingJoinKey
+        // раньше, чем Task успевает его прочитать
+        let joinKey = pendingJoinKey
+        uiLog.info("submit: pending=\(joinKey != nil)")
         Task {
-            if let key = pendingJoinKey {
+            if let key = joinKey {
                 if await store.join(name: chatName, rawKey: key) != nil {
                     pendingJoinKey = nil
                     withAnimation { adding = false }
