@@ -18,19 +18,26 @@ struct Contact: Identifiable, Equatable {
 struct MainView: View {
     @State private var contacts: [Contact] = []
     @State private var qrContact: Contact?
+    @State private var adding = false
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
-                if contacts.isEmpty {
+                if adding {
+                    addingState
+                        .transition(.opacity.combined(with: .offset(y: 24)))
+                } else if contacts.isEmpty {
                     emptyState
+                        .transition(.opacity)
                 } else {
                     contactList
+                        .transition(.opacity)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(.bouncy(duration: 0.35), value: adding)
 
-            BottomBar { name in
+            BottomBar(adding: $adding) { name in
                 let contact = Contact(name: name)
                 withAnimation { contacts.append(contact) }
                 qrContact = contact
@@ -77,6 +84,26 @@ struct MainView: View {
             .padding(.horizontal, DS.space)
             .padding(.top, DS.space)
             .padding(.bottom, DS.controlSize + DS.spaceL)
+        }
+    }
+
+    // Страница добавления: стрелка указывает на поле имени слева.
+    // Позже здесь появится сканирование QR.
+    private var addingState: some View {
+        VStack(spacing: 0) {
+            Spacer()
+
+            HStack(spacing: DS.space / 2) {
+                Image(systemName: "arrow.down")
+                    .font(.system(size: 20, weight: .light))
+                    .foregroundStyle(DS.ink.opacity(0.35))
+                    .padding(.leading, DS.spaceL + DS.space)
+                Text("name the new chat")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundStyle(DS.ink.opacity(0.8))
+                Spacer()
+            }
+            .padding(.bottom, DS.spaceL + DS.controlSize)
         }
     }
 
@@ -136,9 +163,9 @@ struct MainView: View {
 // MARK: - Нижняя панель
 
 struct BottomBar: View {
+    @Binding var adding: Bool
     var onCreate: (String) -> Void
 
-    @State private var adding = false
     @State private var name = ""
     @State private var query = ""
     @FocusState private var searchFocused: Bool
