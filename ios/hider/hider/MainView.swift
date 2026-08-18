@@ -2,22 +2,82 @@
 //  MainView.swift
 //  hider
 //
-//  Главный экран: список контактов (пока пусто) + нижняя панель:
-//  большой поиск и одна кнопка QR. Только UI — без логики.
+//  Главный экран: список контактов + нижняя панель.
+//  Панель в двух режимах: поиск/+  ↔  имя нового контакта/крестик-галочка.
 //
 
 import SwiftUI
 
+struct Contact: Identifiable, Equatable {
+    let id = UUID()
+    let name: String
+    // Пока идентикон из имени; позже — из публичного ключа
+    var seed: Data { Data(name.utf8) }
+}
+
 struct MainView: View {
+    @State private var contacts: [Contact] = []
+    @State private var qrContact: Contact?
+
     var body: some View {
         ZStack(alignment: .bottom) {
-            emptyState
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            BottomBar()
-                .padding(.horizontal, DS.space)
-                .padding(.bottom, DS.space)
+            Group {
+                if contacts.isEmpty {
+                    emptyState
+                } else {
+                    contactList
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            BottomBar { name in
+                let contact = Contact(name: name)
+                withAnimation { contacts.append(contact) }
+                qrContact = contact
+            }
+            .padding(.horizontal, DS.space)
+            .padding(.bottom, DS.space)
         }
         .background(DS.paper)
+        .overlay {
+            if let contact = qrContact {
+                qrOverlay(for: contact)
+            }
+        }
+    }
+
+    // MARK: - Список
+
+    private var contactList: some View {
+        ScrollView {
+            VStack(spacing: DS.space / 2) {
+                ForEach(contacts) { contact in
+                    HStack(spacing: DS.space / 2) {
+                        IdenticonView(seed: contact.seed)
+                            .frame(width: 44, height: 32)
+                        Text(contact.name)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(DS.ink)
+                        Spacer()
+                        Button { qrContact = contact } label: {
+                            Image(systemName: "qrcode")
+                                .font(.system(size: 18, weight: .light))
+                                .foregroundStyle(DS.ink.opacity(0.45))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Show QR")
+                    }
+                    .padding(DS.space / 1.5)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: DS.corner)
+                            .stroke(DS.ink.opacity(0.25), lineWidth: DS.hairline)
+                    )
+                }
+            }
+            .padding(.horizontal, DS.space)
+            .padding(.top, DS.space)
+            .padding(.bottom, DS.controlSize + DS.spaceL)
+        }
     }
 
     private var emptyState: some View {
@@ -34,7 +94,6 @@ struct MainView: View {
 
             Spacer()
 
-            // Стрелка ведёт к кнопке QR в панели
             HStack {
                 Spacer()
                 Image(systemName: "arrow.down")
@@ -45,13 +104,45 @@ struct MainView: View {
             .padding(.bottom, DS.spaceL + DS.controlSize)
         }
     }
+
+    // MARK: - QR контакта (пока плейсхолдер)
+
+    private func qrOverlay(for contact: Contact) -> some View {
+        VStack(spacing: DS.spaceL) {
+            IdenticonView(seed: contact.seed)
+                .frame(width: 120, height: 72)
+
+            RoundedRectangle(cornerRadius: DS.corner)
+                .stroke(DS.ink, lineWidth: DS.stroke)
+                .frame(width: 240, height: 240)
+                .overlay(
+                    // Плейсхолдер QR — заменится на настоящий код
+                    Image(systemName: "qrcode")
+                        .font(.system(size: 160, weight: .ultraLight))
+                        .foregroundStyle(DS.ink.opacity(0.2))
+                )
+
+            Text(contact.name)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(DS.ink)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DS.paper)
+        .onTapGesture { withAnimation { qrContact = nil } }
+        .transition(.opacity)
+    }
 }
 
-// MARK: - Нижняя панель: поиск во всю ширину + кнопка QR
+// MARK: - Нижняя панель
 
 struct BottomBar: View {
+    var onCreate: (String) -> Void
+
+    @State private var adding = false
+    @State private var name = ""
     @State private var query = ""
     @FocusState private var searchFocused: Bool
+    @FocusState private var nameFocused: Bool
     @Namespace private var glassNamespace
 
     var body: some View {
@@ -67,44 +158,96 @@ struct BottomBar: View {
     @ViewBuilder
     private func content(glass: Bool) -> some View {
         HStack(spacing: DS.space / 2) {
-            searchField
+            field
                 .modifier(GlassOrMaterial(glass: glass, shape: .capsule,
-                                          id: "search", namespace: glassNamespace))
+                                          id: "field", namespace: glassNamespace))
 
-            qrButton
+            actionButton
                 .modifier(GlassOrMaterial(glass: glass, shape: .circle,
-                                          id: "qr", namespace: glassNamespace))
+                                          id: "action", namespace: glassNamespace))
         }
+        .animation(.bouncy(duration: 0.35), value: adding)
+        .animation(.bouncy(duration: 0.35), value: name.isEmpty)
+        .animation(.easeOut(duration: 0.25), value: nameFocused)
+        .animation(.easeOut(duration: 0.25), value: searchFocused)
     }
 
-    private var searchField: some View {
+    // Поле: поиск ↔ имя нового контакта
+    private var field: some View {
         HStack(spacing: DS.space / 2) {
-            Image(systemName: "magnifyingglass")
+            Image(systemName: adding ? "person" : "magnifyingglass")
                 .font(.system(size: 18, weight: .light))
                 .foregroundStyle(DS.ink.opacity(0.45))
-            TextField("", text: $query)
-                .textFieldStyle(.plain)
-                .font(.system(.body, design: .monospaced))
-                .focused($searchFocused)
+                .contentTransition(.symbolEffect(.replace))
+
+            if adding {
+                TextField("", text: $name)
+                    .textFieldStyle(.plain)
+                    .font(.system(.body, design: .monospaced))
+                    .focused($nameFocused)
+                    .onSubmit(create)
+            } else {
+                TextField("", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.system(.body, design: .monospaced))
+                    .focused($searchFocused)
+            }
         }
         .padding(.horizontal, DS.space / 1.5)
         .frame(height: DS.controlSize)
         .frame(maxWidth: .infinity)
         .contentShape(Capsule())
-        .onTapGesture { searchFocused = true }
+        .onTapGesture { (adding ? $nameFocused : $searchFocused).wrappedValue = true }
     }
 
-    private var qrButton: some View {
-        Button {
-            // Действий пока нет — только раскладка UI
-        } label: {
-            Image(systemName: "plus")
+    // Кнопка: + ↔ крестик ↔ галочка
+    private var actionButton: some View {
+        Button(action: tapAction) {
+            Image(systemName: adding && !name.isEmpty ? "checkmark" : "plus")
                 .font(.system(size: 22, weight: .light))
                 .foregroundStyle(DS.ink)
+                .contentTransition(.symbolEffect(.replace))
+                // + поворачивается в крестик
+                .rotationEffect(.degrees(adding && name.isEmpty ? 45 : 0))
                 .frame(width: DS.controlSize, height: DS.controlSize)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Add contact")
+        .accessibilityLabel(adding ? (name.isEmpty ? "Cancel" : "Create contact") : "Add contact")
+    }
+
+    private func tapAction() {
+        if !adding {
+            withAnimation(.bouncy(duration: 0.35)) {
+                adding = true
+                name = ""
+            }
+            nameFocused = true
+        } else if name.isEmpty {
+            dismissKeyboardSmoothly()
+            withAnimation(.bouncy(duration: 0.35)) { adding = false }
+        } else {
+            create()
+        }
+    }
+
+    private func create() {
+        guard !name.isEmpty else { return }
+        dismissKeyboardSmoothly()
+        onCreate(name)
+        name = ""
+        withAnimation(.bouncy(duration: 0.35)) { adding = false }
+    }
+
+    /// Снимаем фокус внутри анимации — панель плавно опускается вместе с клавиатурой
+    private func dismissKeyboardSmoothly() {
+        withAnimation(.easeOut(duration: 0.25)) {
+            nameFocused = false
+            searchFocused = false
+        }
+        #if os(iOS)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+        #endif
     }
 }
 
