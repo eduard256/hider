@@ -22,7 +22,7 @@ struct ContentView: View {
         case .locked:
             LockView(vault: vault)
         case .unlocked:
-            MainView()
+            MainView(vault: vault)
         }
     }
 }

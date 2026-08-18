@@ -8,17 +8,16 @@
 
 import SwiftUI
 
-struct Contact: Identifiable, Equatable {
-    let id = UUID()
-    let name: String
-    // Пока идентикон из имени; позже — из публичного ключа
-    var seed: Data { Data(name.utf8) }
-}
-
 struct MainView: View {
-    @State private var contacts: [Contact] = []
-    @State private var qrContact: Contact?
+    @StateObject private var store: ChatStore
+
+    @State private var keyChat: Chat?
     @State private var adding = false
+    @State private var name = ""
+
+    init(vault: Vault) {
+        _store = StateObject(wrappedValue: ChatStore(vault: vault))
+    }
 
     private enum AddMode { case qr, key }
     #if os(macOS)
@@ -35,7 +34,7 @@ struct MainView: View {
                 if adding {
                     addingState
                         .transition(.opacity.combined(with: .offset(y: 24)))
-                } else if contacts.isEmpty {
+                } else if store.chats.isEmpty {
                     emptyState
                         .transition(.opacity)
                 } else {
@@ -49,18 +48,39 @@ struct MainView: View {
                 if !newValue { addMode = Self.defaultAddMode }
             }
 
-            BottomBar(adding: $adding) { name in
-                let contact = Contact(name: name)
-                withAnimation { contacts.append(contact) }
-                qrContact = contact
+            BottomBar(adding: $adding, name: $name) { chatName in
+                Task {
+                    let chat = await store.create(name: chatName)
+                    keyChat = chat
+                }
             }
             .padding(.horizontal, DS.space)
             .padding(.bottom, DS.space)
         }
         .background(DS.paper)
         .overlay {
-            if let contact = qrContact {
-                qrOverlay(for: contact)
+            if let chat = keyChat {
+                ChatKeyView(chat: chat) {
+                    withAnimation { keyChat = nil }
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.25), value: keyChat)
+    }
+
+    // Сканер/ключ: подключение к чужому чату
+    private func join(rawKey: String) {
+        Task {
+            let chatName = name.trimmingCharacters(in: .whitespaces)
+            guard let normalized = try? ChatCrypto.normalizeShortKey(
+                rawKey.hasPrefix("hidr1:") ? String(rawKey.dropFirst(6)) : rawKey
+            ) else { return }
+            let fallbackName = String(normalized.prefix(4)).lowercased()
+            if await store.join(name: chatName.isEmpty ? fallbackName : chatName,
+                                rawKey: rawKey) != nil {
+                name = ""
+                withAnimation { adding = false }
             }
         }
     }
@@ -70,15 +90,15 @@ struct MainView: View {
     private var contactList: some View {
         ScrollView {
             VStack(spacing: DS.space / 2) {
-                ForEach(contacts) { contact in
+                ForEach(store.chats) { chat in
                     HStack(spacing: DS.space / 2) {
-                        IdenticonView(seed: contact.seed)
+                        IdenticonView(seed: chat.keyID)
                             .frame(width: 44, height: 32)
-                        Text(contact.name)
+                        Text(chat.name)
                             .font(.system(.body, design: .monospaced))
                             .foregroundStyle(DS.ink)
                         Spacer()
-                        Button { qrContact = contact } label: {
+                        Button { keyChat = chat } label: {
                             Image(systemName: "qrcode")
                                 .font(.system(size: 18, weight: .light))
                                 .foregroundStyle(DS.ink.opacity(0.45))
@@ -151,8 +171,7 @@ struct MainView: View {
                 .foregroundStyle(DS.ink.opacity(0.4))
 
             QRScannerView { code in
-                // TODO: обмен ключами — этап криптографии
-                _ = code
+                join(rawKey: code)
             }
             .aspectRatio(1, contentMode: .fit)
             .frame(maxWidth: 300)
@@ -169,8 +188,7 @@ struct MainView: View {
                 .foregroundStyle(DS.ink.opacity(0.4))
 
             KeyCodeInput { key in
-                // TODO: подключение по ключу — этап криптографии
-                _ = key
+                join(rawKey: key)
             }
             .frame(maxWidth: 640)
             .padding(.horizontal, DS.spaceL)
@@ -206,32 +224,6 @@ struct MainView: View {
         }
     }
 
-    // MARK: - QR контакта (пока плейсхолдер)
-
-    private func qrOverlay(for contact: Contact) -> some View {
-        VStack(spacing: DS.spaceL) {
-            IdenticonView(seed: contact.seed)
-                .frame(width: 120, height: 72)
-
-            RoundedRectangle(cornerRadius: DS.corner)
-                .stroke(DS.ink, lineWidth: DS.stroke)
-                .frame(width: 240, height: 240)
-                .overlay(
-                    // Плейсхолдер QR — заменится на настоящий код
-                    Image(systemName: "qrcode")
-                        .font(.system(size: 160, weight: .ultraLight))
-                        .foregroundStyle(DS.ink.opacity(0.2))
-                )
-
-            Text(contact.name)
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(DS.ink)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(DS.paper)
-        .onTapGesture { withAnimation { qrContact = nil } }
-        .transition(.opacity)
-    }
 }
 
 // Ввод ключа: одно логическое поле, отрисованное как 4 сегмента по 4 символа.
@@ -314,9 +306,9 @@ private extension Character {
 
 struct BottomBar: View {
     @Binding var adding: Bool
+    @Binding var name: String
     var onCreate: (String) -> Void
 
-    @State private var name = ""
     @State private var query = ""
     @FocusState private var searchFocused: Bool
     @FocusState private var nameFocused: Bool
@@ -470,5 +462,5 @@ private struct GlassOrMaterial: ViewModifier {
 }
 
 #Preview {
-    MainView()
+    MainView(vault: Vault())
 }
