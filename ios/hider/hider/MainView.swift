@@ -19,8 +19,14 @@ struct MainView: View {
     @State private var contacts: [Contact] = []
     @State private var qrContact: Contact?
     @State private var adding = false
+
+    private enum AddMode { case qr, key }
     #if os(macOS)
-    @State private var macScanning = false
+    @State private var addMode: AddMode = .key
+    private static let defaultAddMode: AddMode = .key
+    #else
+    @State private var addMode: AddMode = .qr
+    private static let defaultAddMode: AddMode = .qr
     #endif
 
     var body: some View {
@@ -40,9 +46,7 @@ struct MainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.bouncy(duration: 0.35), value: adding)
             .onChange(of: adding) { _, newValue in
-                #if os(macOS)
-                if !newValue { macScanning = false }
-                #endif
+                if !newValue { addMode = Self.defaultAddMode }
             }
 
             BottomBar(adding: $adding) { name in
@@ -101,15 +105,27 @@ struct MainView: View {
         VStack(spacing: 0) {
             Spacer(minLength: DS.spaceL)
 
-            #if os(macOS)
-            if macScanning {
-                scannerBlock
-            } else {
-                keyBlock
+            Group {
+                if addMode == .qr {
+                    scannerBlock
+                        .transition(.opacity)
+                } else {
+                    keyBlock
+                        .transition(.opacity)
+                }
             }
-            #else
-            scannerBlock
-            #endif
+            .animation(.bouncy(duration: 0.35), value: addMode == .qr)
+
+            // Подпись — переключатель между QR и ключом
+            Button {
+                addMode = addMode == .qr ? .key : .qr
+            } label: {
+                Text(addMode == .qr ? "add via key" : "add via qr")
+                    .font(.system(.subheadline, design: .monospaced))
+                    .foregroundStyle(DS.ink.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, DS.space)
 
             Spacer(minLength: DS.space)
 
@@ -127,9 +143,13 @@ struct MainView: View {
         }
     }
 
-    // Камера: гибкая высота — сжимается под клавиатуру
+    // Камера: квадрат со скруглением
     private var scannerBlock: some View {
         VStack(spacing: DS.space) {
+            Text("scan the qr from the other device")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(DS.ink.opacity(0.4))
+
             QRScannerView { code in
                 // TODO: обмен ключами — этап криптографии
                 _ = code
@@ -138,37 +158,24 @@ struct MainView: View {
             .frame(maxWidth: 300)
             .clipShape(RoundedRectangle(cornerRadius: DS.corner))
             .padding(.horizontal, DS.spaceL)
-
-            Text("add via qr")
-                .font(.system(.subheadline, design: .monospaced))
-                .foregroundStyle(DS.ink.opacity(0.5))
         }
     }
 
-    #if os(macOS)
-    // Мак: сразу показываем ключ (плейсхолдер цепочки), вебка — по кнопке
+    // Ключ: 4 поля по 4 символа, XXXX-XXXX-XXXX-XXXX
     private var keyBlock: some View {
-        VStack(spacing: DS.spaceL) {
-            KeyChainShape()
-                .stroke(DS.ink, style: StrokeStyle(lineWidth: DS.stroke * 2,
-                                                   lineCap: .round, lineJoin: .round))
-                .frame(maxWidth: 640, maxHeight: 80)
-                .padding(.horizontal, DS.spaceL)
-
-            Text("add via qr")
-                .font(.system(.subheadline, design: .monospaced))
-                .foregroundStyle(DS.ink.opacity(0.5))
-
-            Button { macScanning = true } label: {
-                Image(systemName: "web.camera")
-                    .font(.system(size: 22, weight: .light))
-                    .foregroundStyle(DS.ink.opacity(0.6))
+        VStack(spacing: DS.space) {
+            KeyCodeInput { key in
+                // TODO: подключение по ключу — этап криптографии
+                _ = key
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Scan with camera")
+            .frame(maxWidth: 640)
+            .padding(.horizontal, DS.spaceL)
+
+            Text("type the key from the other device")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(DS.ink.opacity(0.4))
         }
     }
-    #endif
 
     private var emptyState: some View {
         VStack(spacing: DS.spaceL) {
@@ -223,30 +230,81 @@ struct MainView: View {
     }
 }
 
-#if os(macOS)
-// Цепочка блоков — плейсхолдер визуализации ключа
-private struct KeyChainShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let blocks = 4
-        let gap = rect.width * 0.05
-        let blockWidth = (rect.width - gap * CGFloat(blocks - 1)) / CGFloat(blocks)
-        let height = min(rect.height, blockWidth * 0.45)
-        let y = rect.midY - height / 2
-        for i in 0..<blocks {
-            let x = rect.minX + CGFloat(i) * (blockWidth + gap)
-            path.addRoundedRect(
-                in: CGRect(x: x, y: y, width: blockWidth, height: height),
-                cornerSize: CGSize(width: height * 0.35, height: height * 0.35))
-            if i < blocks - 1 {
-                path.move(to: CGPoint(x: x + blockWidth, y: rect.midY))
-                path.addLine(to: CGPoint(x: x + blockWidth + gap, y: rect.midY))
+// Ввод ключа: одно логическое поле, отрисованное как 4 сегмента по 4 символа.
+// Скрытый TextField держит всю строку — вставка, очистка и backspace
+// работают как в обычном поле.
+struct KeyCodeInput: View {
+    var onComplete: (String) -> Void
+
+    @State private var key = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ZStack {
+            // Невидимое настоящее поле — принимает весь ввод
+            TextField("", text: $key)
+                .textFieldStyle(.plain)
+                .focused($focused)
+                #if os(iOS)
+                .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .keyboardType(.asciiCapable)
+                #endif
+                .opacity(0.02)
+
+            // Визуальные сегменты
+            HStack(spacing: 0) {
+                ForEach(0..<4, id: \.self) { index in
+                    Text(segment(index))
+                        .font(.system(.title3, design: .monospaced))
+                        .foregroundStyle(DS.ink)
+                        .frame(height: DS.controlSize)
+                        .frame(maxWidth: .infinity)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: DS.corner)
+                                .stroke(DS.ink.opacity(activeSegment == index ? 1 : 0.4),
+                                        lineWidth: DS.stroke)
+                        )
+                        .animation(.easeOut(duration: 0.15), value: activeSegment)
+
+                    if index < 3 {
+                        Rectangle()
+                            .fill(DS.ink.opacity(0.4))
+                            .frame(width: DS.space / 2, height: DS.stroke)
+                    }
+                }
+            }
+            .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { focused = true }
+        // Автофокус при появлении (переключение с qr на ключ)
+        .onAppear { focused = true }
+        .onChange(of: key) { _, newValue in
+            let clean = String(newValue.uppercased()
+                .filter(\.isAlphanumeric)
+                .prefix(16))
+            if clean != key { key = clean }
+            if clean.count == 16 {
+                focused = false
+                onComplete(clean)
             }
         }
-        return path
+    }
+
+    private var activeSegment: Int { min(key.count / 4, 3) }
+
+    private func segment(_ index: Int) -> String {
+        let start = index * 4
+        guard key.count > start else { return "" }
+        let chars = Array(key)
+        return String(chars[start..<min(start + 4, chars.count)])
     }
 }
-#endif
+
+private extension Character {
+    var isAlphanumeric: Bool { isLetter || isNumber }
+}
 
 // MARK: - Нижняя панель
 
