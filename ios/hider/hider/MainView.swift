@@ -20,6 +20,12 @@ struct MainView: View {
     @State private var pendingJoinKey: String?
     @State private var focusNameTrigger = 0
 
+    // Экран чата
+    @State private var selectedChat: Chat?
+    @State private var chatInput = ""
+    @State private var chatResult: ChatResult = .none
+    @State private var debounceTask: Task<Void, Never>?
+
     init(vault: Vault) {
         _store = StateObject(wrappedValue: ChatStore(vault: vault))
     }
@@ -36,7 +42,10 @@ struct MainView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             Group {
-                if adding {
+                if let chat = selectedChat {
+                    ChatView(chat: chat, result: chatResult)
+                        .transition(.opacity.combined(with: .offset(y: 24)))
+                } else if adding {
                     addingState
                         .transition(.opacity.combined(with: .offset(y: 24)))
                 } else if store.chats.isEmpty {
@@ -49,6 +58,10 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.bouncy(duration: 0.35), value: adding)
+            .animation(.bouncy(duration: 0.35), value: selectedChat)
+            .onChange(of: chatInput) { _, newValue in
+                scheduleProcessing(newValue)
+            }
             .onChange(of: adding) { _, newValue in
                 if !newValue {
                     addMode = Self.defaultAddMode
@@ -57,7 +70,10 @@ struct MainView: View {
             }
 
             BottomBar(adding: $adding, name: $name,
-                      focusNameTrigger: focusNameTrigger) { chatName in
+                      chatOpen: selectedChat != nil,
+                      chatText: $chatInput,
+                      focusNameTrigger: focusNameTrigger,
+                      onCloseChat: closeChat) { chatName in
                 submit(name: chatName)
             }
             .padding(.horizontal, DS.space)
@@ -80,6 +96,46 @@ struct MainView: View {
         .simultaneousGesture(TapGesture().onEnded {
             uiLog.info("root tap")
         })
+    }
+
+    // MARK: - Экран чата: дебаунс 3 с и шифрование/расшифровка
+
+    private func closeChat() {
+        debounceTask?.cancel()
+        chatInput = ""
+        chatResult = .none
+        withAnimation { selectedChat = nil }
+    }
+
+    private func scheduleProcessing(_ input: String) {
+        guard selectedChat != nil else { return }
+        debounceTask?.cancel()
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            chatResult = .none
+            return
+        }
+        debounceTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            process(trimmed)
+        }
+    }
+
+    private func process(_ text: String) {
+        guard let chat = selectedChat else { return }
+        if ChatCrypto.isMessage(text) {
+            if let decrypted = try? ChatCrypto.decrypt(text, key: chat.key) {
+                uiLog.info("chat: decrypted")
+                chatResult = .decrypted(decrypted)
+            } else {
+                uiLog.warning("chat: decrypt failed")
+                chatResult = .failed
+            }
+        } else {
+            uiLog.info("chat: encrypted")
+            chatResult = .encrypted(store.encrypt(text, for: chat))
+        }
     }
 
     // Сканер/ключ принял ключ — дальше спрашиваем имя чата
@@ -136,6 +192,11 @@ struct MainView: View {
                         RoundedRectangle(cornerRadius: DS.corner)
                             .stroke(DS.ink.opacity(0.25), lineWidth: DS.hairline)
                     )
+                    .contentShape(RoundedRectangle(cornerRadius: DS.corner))
+                    .onTapGesture {
+                        uiLog.info("chat opened")
+                        withAnimation { selectedChat = chat }
+                    }
                 }
             }
             .padding(.horizontal, DS.space)
@@ -355,7 +416,10 @@ private extension Character {
 struct BottomBar: View {
     @Binding var adding: Bool
     @Binding var name: String
+    var chatOpen = false
+    @Binding var chatText: String
     var focusNameTrigger = 0
+    var onCloseChat: () -> Void = {}
     var onCreate: (String) -> Void
 
     @State private var query = ""
@@ -396,12 +460,22 @@ struct BottomBar: View {
     // Поле: поиск ↔ имя нового контакта
     private var field: some View {
         HStack(spacing: DS.space / 2) {
-            Image(systemName: adding ? "person" : "magnifyingglass")
+            Image(systemName: chatOpen ? "lock" : adding ? "person" : "magnifyingglass")
                 .font(.system(size: 18, weight: .light))
                 .foregroundStyle(DS.ink.opacity(0.45))
                 .contentTransition(.symbolEffect(.replace))
 
-            if adding {
+            if chatOpen {
+                TextField("", text: $chatText,
+                          prompt: Text("encrypted or plain text")
+                              .font(.system(.body, design: .monospaced))
+                              .foregroundStyle(DS.ink.opacity(0.3)),
+                          axis: .vertical)
+                    .lineLimit(1...4)
+                    .textFieldStyle(.plain)
+                    .font(.system(.body, design: .monospaced))
+                    .focused($nameFocused)
+            } else if adding {
                 TextField("", text: $name,
                           prompt: Text("name the new chat")
                               .font(.system(.body, design: .monospaced))
@@ -418,19 +492,20 @@ struct BottomBar: View {
             }
         }
         .padding(.horizontal, DS.space / 1.5)
-        .frame(height: DS.controlSize)
+        .frame(minHeight: DS.controlSize)
         .frame(maxWidth: .infinity)
         .contentShape(Capsule())
         .onTapGesture {
             uiLog.info("search/name field tap")
-            (adding ? $nameFocused : $searchFocused).wrappedValue = true
+            (adding || chatOpen ? $nameFocused : $searchFocused).wrappedValue = true
         }
     }
 
     // Кнопка: + ↔ крестик ↔ галочка
     private var actionButton: some View {
         Button(action: tapAction) {
-            Image(systemName: adding && !name.isEmpty ? "checkmark" : "plus")
+            Image(systemName: chatOpen ? "xmark"
+                  : adding && !name.isEmpty ? "checkmark" : "plus")
                 .font(.system(size: 22, weight: .light))
                 .foregroundStyle(DS.ink)
                 .contentTransition(.symbolEffect(.replace))
@@ -444,7 +519,12 @@ struct BottomBar: View {
     }
 
     private func tapAction() {
-        uiLog.info("bar tap: adding=\(adding) name=\(name.isEmpty ? "empty" : "set")")
+        uiLog.info("bar tap: chat=\(chatOpen) adding=\(adding) name=\(name.isEmpty ? "empty" : "set")")
+        if chatOpen {
+            dismissKeyboardSmoothly()
+            onCloseChat()
+            return
+        }
         if !adding {
             withAnimation(.bouncy(duration: 0.35)) {
                 adding = true
