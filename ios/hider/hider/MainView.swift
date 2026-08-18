@@ -19,6 +19,9 @@ struct MainView: View {
     @State private var contacts: [Contact] = []
     @State private var qrContact: Contact?
     @State private var adding = false
+    #if os(macOS)
+    @State private var macScanning = false
+    #endif
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -36,6 +39,11 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.bouncy(duration: 0.35), value: adding)
+            .onChange(of: adding) { _, newValue in
+                #if os(macOS)
+                if !newValue { macScanning = false }
+                #endif
+            }
 
             BottomBar(adding: $adding) { name in
                 let contact = Contact(name: name)
@@ -87,11 +95,23 @@ struct MainView: View {
         }
     }
 
-    // Страница добавления: стрелка указывает на поле имени слева.
-    // Позже здесь появится сканирование QR.
+    // Страница добавления: сверху сканер QR (на Маке — ключ, вебка по кнопке),
+    // снизу стрелка на поле имени.
     private var addingState: some View {
         VStack(spacing: 0) {
-            Spacer()
+            Spacer(minLength: DS.spaceL)
+
+            #if os(macOS)
+            if macScanning {
+                scannerBlock
+            } else {
+                keyBlock
+            }
+            #else
+            scannerBlock
+            #endif
+
+            Spacer(minLength: DS.space)
 
             HStack(spacing: DS.space / 2) {
                 Image(systemName: "arrow.down")
@@ -106,6 +126,49 @@ struct MainView: View {
             .padding(.bottom, DS.spaceL + DS.controlSize)
         }
     }
+
+    // Камера: гибкая высота — сжимается под клавиатуру
+    private var scannerBlock: some View {
+        VStack(spacing: DS.space) {
+            QRScannerView { code in
+                // TODO: обмен ключами — этап криптографии
+                _ = code
+            }
+            .aspectRatio(1, contentMode: .fit)
+            .frame(maxWidth: 300)
+            .clipShape(RoundedRectangle(cornerRadius: DS.corner))
+            .padding(.horizontal, DS.spaceL)
+
+            Text("add via qr")
+                .font(.system(.subheadline, design: .monospaced))
+                .foregroundStyle(DS.ink.opacity(0.5))
+        }
+    }
+
+    #if os(macOS)
+    // Мак: сразу показываем ключ (плейсхолдер цепочки), вебка — по кнопке
+    private var keyBlock: some View {
+        VStack(spacing: DS.spaceL) {
+            KeyChainShape()
+                .stroke(DS.ink, style: StrokeStyle(lineWidth: DS.stroke * 2,
+                                                   lineCap: .round, lineJoin: .round))
+                .frame(maxWidth: 640, maxHeight: 80)
+                .padding(.horizontal, DS.spaceL)
+
+            Text("add via qr")
+                .font(.system(.subheadline, design: .monospaced))
+                .foregroundStyle(DS.ink.opacity(0.5))
+
+            Button { macScanning = true } label: {
+                Image(systemName: "web.camera")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(DS.ink.opacity(0.6))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Scan with camera")
+        }
+    }
+    #endif
 
     private var emptyState: some View {
         VStack(spacing: DS.spaceL) {
@@ -159,6 +222,31 @@ struct MainView: View {
         .transition(.opacity)
     }
 }
+
+#if os(macOS)
+// Цепочка блоков — плейсхолдер визуализации ключа
+private struct KeyChainShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let blocks = 4
+        let gap = rect.width * 0.05
+        let blockWidth = (rect.width - gap * CGFloat(blocks - 1)) / CGFloat(blocks)
+        let height = min(rect.height, blockWidth * 0.45)
+        let y = rect.midY - height / 2
+        for i in 0..<blocks {
+            let x = rect.minX + CGFloat(i) * (blockWidth + gap)
+            path.addRoundedRect(
+                in: CGRect(x: x, y: y, width: blockWidth, height: height),
+                cornerSize: CGSize(width: height * 0.35, height: height * 0.35))
+            if i < blocks - 1 {
+                path.move(to: CGPoint(x: x + blockWidth, y: rect.midY))
+                path.addLine(to: CGPoint(x: x + blockWidth + gap, y: rect.midY))
+            }
+        }
+        return path
+    }
+}
+#endif
 
 // MARK: - Нижняя панель
 
