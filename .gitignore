@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+
+# Xcode user state (personal, not for public repo)
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad
+
+# Build artifacts
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+.build/
+
+# Secrets
+*.p12
+*.mobileprovision
+*.certSigningRequest
+*.env
