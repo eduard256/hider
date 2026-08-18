@@ -22,11 +22,7 @@ struct ContentView: View {
         case .locked:
             LockView(vault: vault)
         case .unlocked:
-            // Основной экран — следующий этап
-            MountainView()
-                .padding(DS.spaceXL)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(DS.paper)
+            MainView()
         }
     }
 }
