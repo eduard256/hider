@@ -60,7 +60,10 @@ final class ChatStore: ObservableObject {
 
     func create(name: String) async -> Chat {
         let shortKey = ChatCrypto.generateShortKey()
+        log.info("create: deriving key…")
+        let start = Date()
         let key = await Task.detached { ChatCrypto.deriveKey(shortKey: shortKey) }.value
+        log.info("create: derived in \(Date().timeIntervalSince(start), format: .fixed(precision: 2))s")
         let chat = Chat(id: UUID(), name: name, shortKey: shortKey,
                         key: key, keyID: ChatCrypto.keyID(key))
         chats.append(chat)
@@ -81,7 +84,14 @@ final class ChatStore: ObservableObject {
         if let existing = chats.first(where: { $0.shortKey == shortKey }) {
             return existing
         }
+        log.info("join: deriving key…")
+        let start = Date()
         let key = await Task.detached { ChatCrypto.deriveKey(shortKey: shortKey) }.value
+        log.info("join: derived in \(Date().timeIntervalSince(start), format: .fixed(precision: 2))s")
+        // Перепроверяем после долгого PBKDF2 — защита от двойного вызова
+        if let existing = chats.first(where: { $0.shortKey == shortKey }) {
+            return existing
+        }
         let chat = Chat(id: UUID(), name: name, shortKey: shortKey,
                         key: key, keyID: ChatCrypto.keyID(key))
         chats.append(chat)

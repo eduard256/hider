@@ -10,7 +10,7 @@ import Foundation
 import CryptoKit
 import CommonCrypto
 
-enum VaultCrypto {
+nonisolated enum VaultCrypto {
     static let pbkdf2Iterations = 600_000
 
     /// Ключ из пароля: PBKDF2-SHA256

@@ -17,7 +17,7 @@ import Foundation
 import CryptoKit
 import CommonCrypto
 
-enum ChatCrypto {
+nonisolated enum ChatCrypto {
     static let prefix = "hidr1."
     static let shortKeyLength = 16
     static let iterations = 600_000

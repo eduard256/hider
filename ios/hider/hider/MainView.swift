@@ -7,6 +7,9 @@
 //
 
 import SwiftUI
+import os
+
+private let uiLog = Logger(subsystem: "com.webaweba.hider", category: "ui")
 
 struct MainView: View {
     @StateObject private var store: ChatStore
@@ -14,6 +17,8 @@ struct MainView: View {
     @State private var keyChat: Chat?
     @State private var adding = false
     @State private var name = ""
+    @State private var pendingJoinKey: String?
+    @State private var focusNameTrigger = 0
 
     init(vault: Vault) {
         _store = StateObject(wrappedValue: ChatStore(vault: vault))
@@ -45,14 +50,15 @@ struct MainView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(.bouncy(duration: 0.35), value: adding)
             .onChange(of: adding) { _, newValue in
-                if !newValue { addMode = Self.defaultAddMode }
+                if !newValue {
+                    addMode = Self.defaultAddMode
+                    pendingJoinKey = nil
+                }
             }
 
-            BottomBar(adding: $adding, name: $name) { chatName in
-                Task {
-                    let chat = await store.create(name: chatName)
-                    keyChat = chat
-                }
+            BottomBar(adding: $adding, name: $name,
+                      focusNameTrigger: focusNameTrigger) { chatName in
+                submit(name: chatName)
             }
             .padding(.horizontal, DS.space)
             .padding(.bottom, DS.space)
@@ -61,26 +67,42 @@ struct MainView: View {
         .overlay {
             if let chat = keyChat {
                 ChatKeyView(chat: chat) {
+                    uiLog.info("key page: done tapped")
                     withAnimation { keyChat = nil }
                 }
                 .transition(.opacity)
+                .onAppear { uiLog.info("key page: appeared") }
+                .onDisappear { uiLog.info("key page: disappeared") }
             }
         }
         .animation(.easeOut(duration: 0.25), value: keyChat)
+        // Диагностика: тап дошёл до приложения, но не до кнопок?
+        .simultaneousGesture(TapGesture().onEnded {
+            uiLog.info("root tap")
+        })
     }
 
-    // Сканер/ключ: подключение к чужому чату
-    private func join(rawKey: String) {
+    // Сканер/ключ принял ключ — дальше спрашиваем имя чата
+    private func acceptKey(_ rawKey: String) {
+        uiLog.info("key accepted from scanner/input")
+        guard let normalized = try? ChatCrypto.normalizeShortKey(
+            rawKey.hasPrefix("hidr1:") ? String(rawKey.dropFirst(6)) : rawKey
+        ) else { return }
+        withAnimation { pendingJoinKey = normalized }
+        focusNameTrigger += 1
+    }
+
+    // Галочка в панели: создание нового чата или подключение по принятому ключу
+    private func submit(name chatName: String) {
+        uiLog.info("submit: pending=\(pendingJoinKey != nil)")
         Task {
-            let chatName = name.trimmingCharacters(in: .whitespaces)
-            guard let normalized = try? ChatCrypto.normalizeShortKey(
-                rawKey.hasPrefix("hidr1:") ? String(rawKey.dropFirst(6)) : rawKey
-            ) else { return }
-            let fallbackName = String(normalized.prefix(4)).lowercased()
-            if await store.join(name: chatName.isEmpty ? fallbackName : chatName,
-                                rawKey: rawKey) != nil {
-                name = ""
-                withAnimation { adding = false }
+            if let key = pendingJoinKey {
+                if await store.join(name: chatName, rawKey: key) != nil {
+                    pendingJoinKey = nil
+                    withAnimation { adding = false }
+                }
+            } else {
+                keyChat = await store.create(name: chatName)
             }
         }
     }
@@ -126,7 +148,18 @@ struct MainView: View {
             Spacer(minLength: DS.spaceL)
 
             Group {
-                if addMode == .qr {
+                if pendingJoinKey != nil {
+                    // Ключ принят — осталось назвать чат
+                    VStack(spacing: DS.space) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 48, weight: .ultraLight))
+                            .foregroundStyle(DS.ink)
+                        Text("now name this chat")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(DS.ink.opacity(0.4))
+                    }
+                    .transition(.opacity)
+                } else if addMode == .qr {
                     scannerBlock
                         .transition(.opacity)
                 } else {
@@ -135,17 +168,20 @@ struct MainView: View {
                 }
             }
             .animation(.bouncy(duration: 0.35), value: addMode == .qr)
+            .animation(.bouncy(duration: 0.35), value: pendingJoinKey)
 
-            // Подпись — переключатель между QR и ключом
-            Button {
-                addMode = addMode == .qr ? .key : .qr
-            } label: {
-                Text(addMode == .qr ? "add via key" : "add via qr")
-                    .font(.system(.subheadline, design: .monospaced))
-                    .foregroundStyle(DS.ink.opacity(0.5))
+            if pendingJoinKey == nil {
+                // Подпись — переключатель между QR и ключом
+                Button {
+                    addMode = addMode == .qr ? .key : .qr
+                } label: {
+                    Text(addMode == .qr ? "add via key" : "add via qr")
+                        .font(.system(.subheadline, design: .monospaced))
+                        .foregroundStyle(DS.ink.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, DS.space)
             }
-            .buttonStyle(.plain)
-            .padding(.top, DS.space)
 
             Spacer(minLength: DS.space)
 
@@ -154,9 +190,12 @@ struct MainView: View {
                     .font(.system(size: 20, weight: .light))
                     .foregroundStyle(DS.ink.opacity(0.35))
                     .padding(.leading, DS.space)
-                Text("create new chat")
+                Text(pendingJoinKey != nil
+                     ? "name the chat you just added"
+                     : "create new chat")
                     .font(.system(.subheadline, design: .monospaced))
                     .foregroundStyle(DS.ink.opacity(0.8))
+                    .contentTransition(.opacity)
                 Spacer()
             }
             .padding(.bottom, DS.spaceL + DS.controlSize)
@@ -171,7 +210,7 @@ struct MainView: View {
                 .foregroundStyle(DS.ink.opacity(0.4))
 
             QRScannerView { code in
-                join(rawKey: code)
+                acceptKey(code)
             }
             .aspectRatio(1, contentMode: .fit)
             .frame(maxWidth: 300)
@@ -188,7 +227,7 @@ struct MainView: View {
                 .foregroundStyle(DS.ink.opacity(0.4))
 
             KeyCodeInput { key in
-                join(rawKey: key)
+                acceptKey(key)
             }
             .frame(maxWidth: 640)
             .padding(.horizontal, DS.spaceL)
@@ -233,6 +272,7 @@ struct KeyCodeInput: View {
     var onComplete: (String) -> Void
 
     @State private var key = ""
+    @State private var completed = false
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -282,8 +322,13 @@ struct KeyCodeInput: View {
                 .prefix(16))
             if clean != key { key = clean }
             if clean.count == 16 {
+                // onChange может сработать дважды (фильтрация меняет key)
+                guard !completed else { return }
+                completed = true
                 focused = false
                 onComplete(clean)
+            } else {
+                completed = false
             }
         }
     }
@@ -307,6 +352,7 @@ private extension Character {
 struct BottomBar: View {
     @Binding var adding: Bool
     @Binding var name: String
+    var focusNameTrigger = 0
     var onCreate: (String) -> Void
 
     @State private var query = ""
@@ -316,7 +362,9 @@ struct BottomBar: View {
 
     var body: some View {
         if #available(iOS 26.0, macOS 26.0, *) {
-            GlassEffectContainer(spacing: DS.space / 2) {
+            // Малый spacing: иначе стёкла поиска и кнопки сливаются,
+            // и хит-тест кнопки уходит полю поиска
+            GlassEffectContainer(spacing: 2) {
                 content(glass: true)
             }
         } else {
@@ -339,6 +387,7 @@ struct BottomBar: View {
         .animation(.bouncy(duration: 0.35), value: name.isEmpty)
         .animation(.easeOut(duration: 0.25), value: nameFocused)
         .animation(.easeOut(duration: 0.25), value: searchFocused)
+        .onChange(of: focusNameTrigger) { _, _ in nameFocused = true }
     }
 
     // Поле: поиск ↔ имя нового контакта
@@ -369,7 +418,10 @@ struct BottomBar: View {
         .frame(height: DS.controlSize)
         .frame(maxWidth: .infinity)
         .contentShape(Capsule())
-        .onTapGesture { (adding ? $nameFocused : $searchFocused).wrappedValue = true }
+        .onTapGesture {
+            uiLog.info("search/name field tap")
+            (adding ? $nameFocused : $searchFocused).wrappedValue = true
+        }
     }
 
     // Кнопка: + ↔ крестик ↔ галочка
@@ -382,12 +434,14 @@ struct BottomBar: View {
                 // + поворачивается в крестик
                 .rotationEffect(.degrees(adding && name.isEmpty ? 45 : 0))
                 .frame(width: DS.controlSize, height: DS.controlSize)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(adding ? (name.isEmpty ? "Cancel" : "Create contact") : "Add contact")
     }
 
     private func tapAction() {
+        uiLog.info("bar tap: adding=\(adding) name=\(name.isEmpty ? "empty" : "set")")
         if !adding {
             withAnimation(.bouncy(duration: 0.35)) {
                 adding = true
