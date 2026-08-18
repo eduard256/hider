@@ -133,8 +133,8 @@ struct MainView: View {
                 Image(systemName: "arrow.down")
                     .font(.system(size: 20, weight: .light))
                     .foregroundStyle(DS.ink.opacity(0.35))
-                    .padding(.leading, DS.spaceL + DS.space)
-                Text("name the new chat")
+                    .padding(.leading, DS.space)
+                Text("create new chat")
                     .font(.system(.subheadline, design: .monospaced))
                     .foregroundStyle(DS.ink.opacity(0.8))
                 Spacer()
@@ -146,7 +146,7 @@ struct MainView: View {
     // Камера: квадрат со скруглением
     private var scannerBlock: some View {
         VStack(spacing: DS.space) {
-            Text("scan the qr from the other device")
+            Text("add someone else's chat")
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(DS.ink.opacity(0.4))
 
@@ -164,6 +164,10 @@ struct MainView: View {
     // Ключ: 4 поля по 4 символа, XXXX-XXXX-XXXX-XXXX
     private var keyBlock: some View {
         VStack(spacing: DS.space) {
+            Text("add someone else's chat")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(DS.ink.opacity(0.4))
+
             KeyCodeInput { key in
                 // TODO: подключение по ключу — этап криптографии
                 _ = key
@@ -258,7 +262,7 @@ struct KeyCodeInput: View {
                     Text(segment(index))
                         .font(.system(.title3, design: .monospaced))
                         .foregroundStyle(DS.ink)
-                        .frame(height: DS.controlSize)
+                        .frame(height: DS.controlSize / 1.5)
                         .frame(maxWidth: .infinity)
                         .overlay(
                             RoundedRectangle(cornerRadius: DS.corner)
@@ -354,7 +358,10 @@ struct BottomBar: View {
                 .contentTransition(.symbolEffect(.replace))
 
             if adding {
-                TextField("", text: $name)
+                TextField("", text: $name,
+                          prompt: Text("name the new chat")
+                              .font(.system(.body, design: .monospaced))
+                              .foregroundStyle(DS.ink.opacity(0.3)))
                     .textFieldStyle(.plain)
                     .font(.system(.body, design: .monospaced))
                     .focused($nameFocused)
