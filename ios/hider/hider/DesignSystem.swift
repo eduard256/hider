@@ -25,6 +25,18 @@ enum DS {
     static let controlSize: CGFloat = 64
 }
 
+struct ShakeEffect: GeometryEffect {
+    var shakes: CGFloat
+    var animatableData: CGFloat {
+        get { shakes }
+        set { shakes = newValue }
+    }
+    func effectValue(size: CGSize) -> ProjectionTransform {
+        ProjectionTransform(CGAffineTransform(
+            translationX: 8 * sin(shakes * .pi * 4), y: 0))
+    }
+}
+
 extension Color {
     init(light: Color, dark: Color) {
         #if canImport(UIKit)

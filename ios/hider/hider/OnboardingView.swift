@@ -200,18 +200,6 @@ struct OnboardingView: View {
     }
 }
 
-private struct ShakeEffect: GeometryEffect {
-    var shakes: CGFloat
-    var animatableData: CGFloat {
-        get { shakes }
-        set { shakes = newValue }
-    }
-    func effectValue(size: CGSize) -> ProjectionTransform {
-        ProjectionTransform(CGAffineTransform(
-            translationX: 8 * sin(shakes * .pi * 4), y: 0))
-    }
-}
-
 #Preview {
     OnboardingView { _ in }
 }

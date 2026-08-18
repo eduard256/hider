@@ -6,21 +6,27 @@
 import SwiftUI
 
 struct ContentView: View {
-    @AppStorage("setupComplete") private var setupComplete = false
+    @StateObject private var vault = Vault()
 
     var body: some View {
-        if setupComplete {
+        switch vault.state {
+        case .needsSetup:
+            OnboardingView { password in
+                do {
+                    try vault.create(password: password)
+                } catch {
+                    // Создание хранилища упало — это фатально для настройки
+                    assertionFailure("vault creation failed: \(error)")
+                }
+            }
+        case .locked:
+            LockView(vault: vault)
+        case .unlocked:
             // Основной экран — следующий этап
             MountainView()
                 .padding(DS.spaceXL)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(DS.paper)
-        } else {
-            OnboardingView { password in
-                // TODO: вывести ключ из пароля и сохранить в Keychain (этап криптографии)
-                _ = password
-                setupComplete = true
-            }
         }
     }
 }
